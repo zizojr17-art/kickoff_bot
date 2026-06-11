@@ -38,6 +38,7 @@ from football_api import (
     close_session,
     get_competition_matches,
     get_current_score,
+    get_minute,
     get_live_matches,
     get_match_detail,
     get_next_match,
@@ -1255,13 +1256,17 @@ async def monitor_loop() -> None:
         diff = (dt - now).total_seconds() / 60
 
         for minutes in (60, 15):
-            if abs(diff - minutes) < 2.0 and not state.is_reminder_sent(mid, minutes):
+            # Fire once the threshold is reached. The lower bound tolerates a
+            # few minutes of loop delay (rate-limit back-off, slow API) so a
+            # reminder is never silently skipped, while never firing after
+            # kick-off (diff > 0 is guaranteed since minutes-5 > 0).
+            if minutes - 5 < diff <= minutes and not state.is_reminder_sent(mid, minutes):
                 state.mark_reminder_sent(mid, minutes)
-                log.info("[MONITOR] Reminder %d min for match %s", minutes, mid)
+                log.info("[MONITOR] Reminder %d min for match %s (%.1f min out)", minutes, mid, diff)
                 await broadcast(emb.embed_reminder(_annotate_match(match), minutes), min_mode="standard")
 
-        # Prediction poll — 90 min before kickoff
-        if 88 < diff < 92 and not state.is_reminder_sent(mid, 90):
+        # Prediction poll — ~90 min before kickoff
+        if 85 < diff <= 92 and not state.is_reminder_sent(mid, 90):
             state.mark_reminder_sent(mid, 90)
             home = team_display(match.get("homeTeam", {}))
             away = team_display(match.get("awayTeam", {}))
@@ -1363,10 +1368,9 @@ async def _process_live_match(match: dict, snap: dict, status_changed: bool) -> 
             await broadcast(emb.embed_penalty_shootout(ann_match, detail), min_mode="standard")
 
     # MOTM vote — at ~75 min (outside status_changed so it fires even when status stays IN_PLAY)
-    minute = match.get("minute") or 0
-    if cur_stat == "IN_PLAY" and int(minute) >= 75 and "MOTM" not in sent:
-        detail2  = await get_match_detail(match["id"])
-        nominees = _build_motm_nominees(detail2 or {})
+    minute = get_minute(match) or get_minute(detail) or 0
+    if cur_stat == "IN_PLAY" and minute >= 75 and "MOTM" not in sent:
+        nominees = _build_motm_nominees(detail)
         if nominees:
             state.mark_sent(mid, "MOTM")
             motm_em   = emb.embed_motm_vote(ann_match)
@@ -1522,7 +1526,11 @@ async def daily_summary_loop() -> None:
         return
 
     for gid, cfg in configs.items():
-        cid = cfg.get("channel_id")
+        # Daily summary is a "detailed"-mode feature and belongs in the summary
+        # channel (falling back to the live-alerts channel if unset).
+        if not _mode_at_least(gid, "detailed"):
+            continue
+        cid = cfg.get("summary_channel_id") or cfg.get("channel_id")
         if not cid:
             continue
         tz        = _tz_for(gid)
@@ -1641,6 +1649,36 @@ async def _post_commands_menu_if_needed() -> None:
             log.error("[MENU] Post failed for guild %s: %s", gid, e)
 
 
+@tree.error
+async def on_app_command_error(
+    interaction: discord.Interaction, error: app_commands.AppCommandError
+) -> None:
+    """Surface and log slash-command failures.
+
+    Without this, any exception inside a command shows the user a bare
+    "This interaction failed" with nothing in the logs — which is exactly
+    what made commands like /dashboard appear "broken".
+    """
+    original = error.original if isinstance(error, app_commands.CommandInvokeError) else error
+    cmd_name = interaction.command.name if interaction.command else "?"
+
+    if isinstance(error, app_commands.MissingPermissions):
+        msg = "You don't have permission to use this command."
+    elif isinstance(error, app_commands.CommandOnCooldown):
+        msg = f"Slow down — try again in {error.retry_after:.0f}s."
+    else:
+        msg = "Something went wrong running that command. Please try again in a moment."
+        log.error("[CMD] /%s failed: %s", cmd_name, original, exc_info=original)
+
+    try:
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=_error_embed(msg), ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=_error_embed(msg), ephemeral=True)
+    except discord.HTTPException:
+        pass
+
+
 @bot.event
 async def on_command_error(ctx: commands.Context, error: commands.CommandError) -> None:
     if isinstance(error, commands.MissingPermissions):
@@ -1679,6 +1717,18 @@ _register("Match Commands", "dashboard", "Post the interactive World Cup dashboa
 async def slash_dashboard(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
 
+    channel = interaction.channel
+    if interaction.guild_id is None or not isinstance(
+        channel, (discord.TextChannel, discord.Thread)
+    ):
+        await interaction.followup.send(
+            embed=_error_embed(
+                "This command must be used in a server text channel.",
+            ),
+            ephemeral=True,
+        )
+        return
+
     gid = str(interaction.guild_id)
     cid = str(interaction.channel_id)
 
@@ -1693,10 +1743,10 @@ async def slash_dashboard(interaction: discord.Interaction):
                 pass
 
     try:
-        msg = await interaction.channel.send(embed=emb.embed_dashboard(), view=DashboardView())
+        msg = await channel.send(embed=emb.embed_dashboard(), view=DashboardView())
         state.save_interactive_panel_msg(gid, cid, msg.id)
         await interaction.followup.send(
-            embed=_success_embed(f"Dashboard posted in {interaction.channel.mention}."),
+            embed=_success_embed(f"Dashboard posted in {channel.mention}."),
             ephemeral=True,
         )
         log.info("[BOT] Dashboard posted for guild %s", gid)
@@ -2073,9 +2123,7 @@ async def slash_match(interaction: discord.Interaction, match_id: int):
         )
         return
     status = detail.get("status", "")
-    ann    = _annotate_match(detail)
-    num    = _match_num_str(match_id)
-    title_prefix = f"Match {num} — " if num else ""
+    ann    = _annotate_match(detail)  # injects matchNumber/matchDay → shown by embeds
     if status == "FINISHED":
         await interaction.followup.send(embed=emb.embed_fulltime(ann, detail))
     elif status in ("IN_PLAY", "PAUSED", "EXTRA_TIME", "PENALTY_SHOOTOUT"):
