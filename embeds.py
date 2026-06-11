@@ -53,12 +53,23 @@ def _ts_rel(dt: datetime | None) -> str:
     return f"<t:{int(dt.timestamp())}:R>"
 
 
+def _match_no(match: dict) -> str:
+    """Return an official WC match-number prefix like ``#42  `` or ``''``.
+
+    The number is injected by ``bot._annotate_match`` (1-indexed, 1–104).
+    Falls back to an empty string when the match order has not been loaded
+    yet, so embeds degrade gracefully instead of showing ``#None``.
+    """
+    n = match.get("matchNumber")
+    return f"`#{n}`  " if n else ""
+
+
 def _match_title(match: dict) -> str:
     home = team_display(match.get("homeTeam", {}))
     away = team_display(match.get("awayTeam", {}))
     hf   = team_flag(match.get("homeTeam", {}))
     af   = team_flag(match.get("awayTeam", {}))
-    return f"{hf} {home}  vs  {away} {af}"
+    return f"{_match_no(match)}{hf} {home}  vs  {away} {af}"
 
 
 def _stage_badge(match: dict) -> str:
@@ -68,6 +79,10 @@ def _stage_badge(match: dict) -> str:
     label = STAGE_NAMES.get(stage, stage.replace("_", " ").title())
     if group_letter:
         label += f" · Group {group_letter}"
+    # Matchday only makes sense in the group stage (1, 2, 3).
+    matchday = match.get("matchDay") or match.get("matchday")
+    if matchday and stage in ("GROUP_STAGE", ""):
+        label += f" · Matchday {matchday}"
     return label
 
 
@@ -129,7 +144,7 @@ def embed_today(matches: list[dict]) -> list[discord.Embed]:
 
             stage = _stage_badge(m)
             em.add_field(
-                name=f"{hf} {home}  vs  {away} {af}",
+                name=f"{_match_no(m)}{hf} {home}  vs  {away} {af}",
                 value=f"{label}\n*{stage}*",
                 inline=False,
             )
@@ -154,7 +169,7 @@ def embed_upcoming(matches: list[dict], days: int) -> discord.Embed:
         dt   = parse_dt(m.get("utcDate", ""))
         stage = _stage_badge(m)
         em.add_field(
-            name=f"{hf} {home}  vs  {away} {af}",
+            name=f"{_match_no(m)}{hf} {home}  vs  {away} {af}",
             value=f"{_ts(dt)}  {_ts_rel(dt)}\n*{stage}*",
             inline=False,
         )
@@ -200,11 +215,11 @@ def embed_live(matches: list[dict]) -> discord.Embed:
         stage = _stage_badge(m)
 
         em.add_field(
-            name=f"{hf} {home}  {h} – {a}  {away} {af}",
+            name=f"{_match_no(m)}{hf} {home}  {h} – {a}  {away} {af}",
             value=f"**{badge}**  ·  *{stage}*",
             inline=False,
         )
-    return _footer(em, "• Updates every 2 min")
+    return _footer(em, "• Updates every 60s")
 
 
 # ── Next match ────────────────────────────────────────────────────────────────
@@ -219,7 +234,7 @@ def embed_nextmatch(match: dict) -> discord.Embed:
 
     em = discord.Embed(
         title=f"⏰ Next Match  ·  {stage}",
-        description=f"## {hf} {home}  vs  {away} {af}",
+        description=f"## {_match_no(match)}{hf} {home}  vs  {away} {af}",
         color=C_GOLD,
     )
     em.add_field(name="📅 Kick-off", value=f"{_ts(dt)}\n{_ts_rel(dt)}", inline=True)
@@ -246,7 +261,7 @@ def embed_kickoff(match: dict, detail: dict) -> discord.Embed:
 
     em = discord.Embed(
         title="🔔 Kick-off!",
-        description=f"# {hf} {home}  vs  {away} {af}\n*{stage}*",
+        description=f"# {_match_no(match)}{hf} {home}  vs  {away} {af}\n*{stage}*",
         color=C_GOLD,
         timestamp=datetime.now(timezone.utc),
     )
@@ -265,7 +280,7 @@ def embed_halftime(match: dict, detail: dict) -> discord.Embed:
 
     em = discord.Embed(
         title="⏱️ Half Time",
-        description=f"## {hf} {home}  **{h} – {a}**  {away} {af}",
+        description=f"## {_match_no(match)}{hf} {home}  **{h} – {a}**  {away} {af}\n*{_stage_badge(match)}*",
         color=C_ORANGE,
         timestamp=datetime.now(timezone.utc),
     )
@@ -290,7 +305,7 @@ def embed_second_half(match: dict) -> discord.Embed:
 
     em = discord.Embed(
         title="▶️ Second Half Underway",
-        description=f"{hf} {home}  **{h} – {a}**  {away} {af}",
+        description=f"{_match_no(match)}{hf} {home}  **{h} – {a}**  {away} {af}",
         color=C_TEAL,
         timestamp=datetime.now(timezone.utc),
     )
@@ -306,7 +321,7 @@ def embed_extra_time(match: dict, detail: dict) -> discord.Embed:
 
     em = discord.Embed(
         title="⚡ Extra Time!",
-        description=f"## {hf} {home}  **{h} – {a}**  {away} {af}\nKnockout match — it's going to extra time!",
+        description=f"## {_match_no(match)}{hf} {home}  **{h} – {a}**  {away} {af}\nKnockout match — it's going to extra time!",
         color=C_ORANGE,
         timestamp=datetime.now(timezone.utc),
     )
@@ -322,7 +337,7 @@ def embed_penalty_shootout(match: dict, detail: dict) -> discord.Embed:
     em = discord.Embed(
         title="🎯 Penalty Shootout!",
         description=(
-            f"## {hf} {home}  vs  {away} {af}\n"
+            f"## {_match_no(match)}{hf} {home}  vs  {away} {af}\n"
             "It all comes down to penalties! 🍿"
         ),
         color=C_PURPLE,
@@ -354,7 +369,7 @@ def embed_goal(match: dict, detail: dict, goal: dict) -> discord.Embed:
     em = discord.Embed(
         title=f"⚽ GOAL! — {flag} {scorer_team}",
         description=(
-            f"## {hf} {home}  **{h} – {a}**  {away} {af}\n\n"
+            f"## {_match_no(match)}{hf} {home}  **{h} – {a}**  {away} {af}\n\n"
             f"**{scorer}**{penalty_note}{og_note}  ·  {minute}'"
         ),
         color=C_GREEN,
@@ -395,7 +410,7 @@ def embed_red_card(match: dict, detail: dict, card: dict) -> discord.Embed:
         color=C_RED,
         timestamp=datetime.now(timezone.utc),
     )
-    em.add_field(name="Match", value=f"{hf} {home}  vs  {away} {af}", inline=False)
+    em.add_field(name="Match", value=f"{_match_no(match)}{hf} {home}  vs  {away} {af}", inline=False)
     if reason:
         em.add_field(name="Reason", value=reason, inline=True)
     return _footer(em)
@@ -415,7 +430,7 @@ def embed_fulltime(match: dict, detail: dict) -> discord.Embed:
     em = discord.Embed(
         title="🏁 Full Time",
         description=(
-            f"## {hf} {home}  **{h} – {a}**  {away} {af}\n"
+            f"## {_match_no(match)}{hf} {home}  **{h} – {a}**  {away} {af}\n"
             f"*{stage}*"
         ),
         color=C_GOLD,
@@ -461,7 +476,7 @@ def embed_lineups(match: dict, detail: dict) -> discord.Embed:
 
     em = discord.Embed(
         title=f"📋 Confirmed Lineups  ·  {stage}",
-        description=f"**{hf} {home}  vs  {away} {af}**",
+        description=f"**{_match_no(match)}{hf} {home}  vs  {away} {af}**",
         color=C_BLUE,
     )
 
@@ -495,11 +510,12 @@ def embed_reminder(match: dict, minutes: int) -> discord.Embed:
     stage = _stage_badge(match)
 
     em = discord.Embed(
-        title=f"⏰ Kick-off in {minutes} minute{'s' if minutes != 1 else ''}",
+        title=f"⏰ Kick-off in ~{minutes} minute{'s' if minutes != 1 else ''}",
         description=(
-            f"## {hf} {home}  vs  {away} {af}\n"
+            f"## {_match_no(match)}{hf} {home}  vs  {away} {af}\n"
             f"*{stage}*\n\n"
-            f"📅 {_ts(dt)}"
+            f"📅 {_ts(dt)}\n"
+            f"⏳ Kick-off {_ts_rel(dt)}"
         ),
         color=C_GOLD,
     )
@@ -528,9 +544,9 @@ def embed_prediction_poll(match: dict) -> discord.Embed:
     em = discord.Embed(
         title="🎯 Score Prediction",
         description=(
-            f"## {hf} {home}  vs  {away} {af}\n"
+            f"## {_match_no(match)}{hf} {home}  vs  {away} {af}\n"
             f"*{stage}*\n\n"
-            f"📅 Kick-off: {_ts(dt)}"
+            f"📅 Kick-off: {_ts(dt)}  {_ts_rel(dt)}"
         ),
         color=C_PURPLE,
     )
@@ -562,7 +578,7 @@ def embed_prediction_results(
 
     em = discord.Embed(
         title="📊 Prediction Results",
-        description=f"## {hf} {home}  **{actual_h} – {actual_a}**  {away} {af}",
+        description=f"## {_match_no(match)}{hf} {home}  **{actual_h} – {actual_a}**  {away} {af}",
         color=C_PURPLE,
     )
 
@@ -591,7 +607,7 @@ def embed_motm_vote(match: dict) -> discord.Embed:
     em = discord.Embed(
         title="🌟 Man of the Match Vote",
         description=(
-            f"**{hf} {home}  vs  {away} {af}**\n\n"
+            f"**{_match_no(match)}{hf} {home}  vs  {away} {af}**\n\n"
             "Who was the standout player? Cast your vote below!\n"
             "*You can change your vote until full time.*"
         ),
@@ -608,7 +624,7 @@ def embed_motm_result(match: dict, winners: list[str], tally: dict) -> discord.E
 
     em = discord.Embed(
         title="🏆 Man of the Match",
-        description=f"**{hf} {home}  vs  {away} {af}**",
+        description=f"**{_match_no(match)}{hf} {home}  vs  {away} {af}**",
         color=C_GOLD,
     )
 
@@ -876,7 +892,7 @@ def embed_matchcenter(
             hf   = team_flag(m.get("homeTeam", {}))
             af   = team_flag(m.get("awayTeam", {}))
             h, a = get_current_score(m)
-            em1.add_field(name=f"{hf} {home}  {h}–{a}  {away} {af}", value="\u200b", inline=False)
+            em1.add_field(name=f"{_match_no(m)}{hf} {home}  {h}–{a}  {away} {af}", value="\u200b", inline=False)
     elif next_match:
         home  = team_display(next_match.get("homeTeam", {}))
         away  = team_display(next_match.get("awayTeam", {}))
@@ -886,7 +902,7 @@ def embed_matchcenter(
         stage = _stage_badge(next_match)
         em1.add_field(
             name="⏰ Next Match",
-            value=f"{hf} {home}  vs  {away} {af}\n*{stage}*\n{_ts(dt)}  {_ts_rel(dt)}",
+            value=f"{_match_no(next_match)}{hf} {home}  vs  {away} {af}\n*{stage}*\n{_ts(dt)}  {_ts_rel(dt)}",
             inline=False,
         )
     else:
@@ -991,7 +1007,7 @@ def embed_full_recap(match: dict, detail: dict | None, youtube_url: str | None) 
     em = discord.Embed(
         title=f"📺 Match Report  ·  {stage}",
         description=(
-            f"## {hf} {home}  **{h} – {a}**  {away} {af}\n"
+            f"## {_match_no(match)}{hf} {home}  **{h} – {a}**  {away} {af}\n"
             "*Full-time report*"
         ),
         color=C_BLUE,
@@ -1063,7 +1079,7 @@ def embed_daily_summary(matches: list[dict], date_str: str) -> discord.Embed:
         badge  = "✅ FT" if status == "FINISHED" else "🔴 Live"
         stage  = _stage_badge(m)
         em.add_field(
-            name=f"{hf} {home}  {h}–{a}  {away} {af}",
+            name=f"{_match_no(m)}{hf} {home}  {h}–{a}  {away} {af}",
             value=f"{badge}  ·  *{stage}*",
             inline=False,
         )
@@ -1321,7 +1337,7 @@ def embed_status(guild: Any, cfg: dict, monitor_running: bool) -> discord.Embed:
     mode_icons = {"quiet": "🔇", "standard": "📢", "detailed": "📋"}
     mode_label = f"{mode_icons.get(mode, '📢')} {mode.capitalize()}"
 
-    mon = "✅ Active (every 2 min)" if monitor_running else "❌ Stopped"
+    mon = "✅ Active (every 60s)" if monitor_running else "❌ Stopped"
     if not cfg.get("channel_id"):
         mon = "⚠️ Disabled — run `/setchannel`"
 

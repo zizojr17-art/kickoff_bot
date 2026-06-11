@@ -100,8 +100,16 @@ async def _get(path: str, params: dict | None = None) -> dict | list | None:
             if resp.status == 200:
                 return await resp.json()
             if resp.status == 429:
-                log.warning("[API] Rate limited (429) on %s — backing off 60 s", path)
-                await asyncio.sleep(60)
+                # Respect the API's own reset hint instead of a blanket 60 s
+                # sleep, which would stall the monitor loop and delay every
+                # subsequent notification.
+                reset = resp.headers.get("X-RequestCounter-Reset", "")
+                try:
+                    wait = min(float(reset), 10.0) if reset else 5.0
+                except ValueError:
+                    wait = 5.0
+                log.warning("[API] Rate limited (429) on %s — backing off %.0fs", path, wait)
+                await asyncio.sleep(wait)
                 return None
             if resp.status in (401, 403):
                 log.error("[API] Auth error %d on %s — check FOOTBALL_DATA_API_KEY", resp.status, path)
@@ -233,10 +241,16 @@ _wc_match_order: list[int] = []
 
 
 async def load_wc_match_order() -> None:
+    """Cache the official WC match order (match #1 → #104).
+
+    The competition endpoint does not guarantee chronological ordering, so we
+    sort by kick-off time (then id) to produce stable, correct match numbers.
+    The window covers the whole tournament regardless of "today" so numbers
+    don't shift as the tournament progresses.
+    """
     global _wc_match_order
-    today   = datetime.now(timezone.utc)
-    end     = (today + timedelta(days=90)).strftime("%Y-%m-%d")
-    matches = await get_competition_matches("2026-06-01", end)
+    matches = await get_competition_matches("2026-06-01", "2026-07-31")
+    matches.sort(key=lambda m: (m.get("utcDate") or "", m.get("id", 0)))
     _wc_match_order = [m["id"] for m in matches]
     log.info("[API] Loaded %d WC match IDs", len(_wc_match_order))
 
@@ -278,6 +292,36 @@ def get_score(match: dict, period: str = "fullTime") -> tuple[int | None, int | 
     h     = (score.get(period) or {}).get("home")
     a     = (score.get(period) or {}).get("away")
     return h, a
+
+
+def get_minute(match: dict) -> int | None:
+    """Best-effort current match minute.
+
+    The matches-list endpoint frequently omits ``minute`` and may return values
+    like ``"90+2"`` or ``"45'"``. This parses those safely and, as a last
+    resort, estimates the minute from kick-off for in-play matches so that
+    minute-gated events (e.g. MOTM voting) still fire.
+    """
+    raw = match.get("minute")
+    if raw is not None:
+        s = str(raw).strip().replace("'", "")
+        if "+" in s:
+            base, _, extra = s.partition("+")
+            try:
+                return int(base) + int(extra or 0)
+            except ValueError:
+                pass
+        try:
+            return int(s)
+        except ValueError:
+            pass
+    if match.get("status") in ("IN_PLAY", "PAUSED", "EXTRA_TIME", "PENALTY_SHOOTOUT"):
+        dt = parse_dt(match.get("utcDate", ""))
+        if dt:
+            elapsed = (datetime.now(timezone.utc) - dt).total_seconds() / 60
+            if elapsed >= 0:
+                return int(elapsed)
+    return None
 
 
 def get_current_score(match: dict) -> tuple[int, int]:
