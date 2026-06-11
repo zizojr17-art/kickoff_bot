@@ -1,4 +1,4 @@
-# World Cup 2026 Discord Bot
+# World Cup 2026 "Kickoff" Discord Bot
 
 A production-quality FIFA World Cup 2026 companion bot for Discord — live match alerts, score predictions, MOTM voting, group standings, interactive dashboard, and advanced prediction stats.
 
