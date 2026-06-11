@@ -2386,12 +2386,6 @@ async def prefix_setmode(ctx, mode: str = "standard"):
     await ctx.send(embed=_success_embed(f"{icons.get(mode, '📢')} Mode set to **{mode}**."))
 
 
-@bot.command(name="leaderboard", help="Prediction leaderboard")
-async def _prefix_lb(ctx):
-    lb = state.get_leaderboard(str(ctx.guild.id))
-    await ctx.send(embed=emb.embed_leaderboard(ctx.guild, lb))
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 #  ENTRY POINT
 # ═══════════════════════════════════════════════════════════════════════════════
